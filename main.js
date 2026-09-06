@@ -1,16 +1,19 @@
 /*
  * 中文自然排序 (CN Natural Sort) — Obsidian 社区插件
- * 让文件浏览器按「第X章 / 第X节」等中文数字自然排序，无需改名、不改内容。
+ * 让文件浏览器按「第X章 / 第X节」等中文数字自然排序，无需改名、不改内容、不写配置。
  *
- * 实现要点（v1.1 修复）：
- * - 新版 Obsidian 的 data-path 位于「内层标题元素」上，外层条目才是要移动的元素：
- *     div.tree-item.nav-file
- *       └ div.tree-item-self.nav-file-title[data-path]
- *   因此先查 [data-path]，再向上反查条目元素 (.tree-item)，避免取到空排序键。
- * - 不依赖任何具体类名做容器定位：把条目按「父元素」分组，父元素即子项容器，
- *   从而同时兼容新版 .tree-item-children 与旧版 .nav-folder-children，根目录也覆盖。
- * - 仅在顺序确实变化时移动节点，且排序后再次运行会判定为"已有序"而不改动 DOM，
- *   避免 MutationObserver 无限循环。
+ * ── 为什么 v1.1 不再碰 DOM ──────────────────────────────────────────────
+ * v1.0 的做法是拿到 DOM 节点后 appendChild 重排。这在文件浏览器上行不通：
+ * 1. 文件浏览器是「虚拟滚动」的（内部 infinityScroll），容器里有一个 1px 的
+ *    pusherEl 撑高元素，它必须留在最后；appendChild 会把它顶到最前面，
+ *    滚动高度计算与条目回收全部错乱 → 点击展开/折叠失效。
+ * 2. 视口外的条目根本不在 DOM 里，重排的只是局部，滚动回来又乱。
+ *
+ * v1.1 改为「接管 Obsidian 自己的排序入口」：
+ * FileExplorerView.getSortedFolderItems(folder) 是根目录与每一个子文件夹
+ * 共用的唯一排序出口，返回建树用的条目数组。我们只把它返回的数组按中文
+ * 自然序重排一次，Obsidian 照常建树、照常虚拟滚动 —— 全程零 DOM 改动，
+ * 展开/折叠、拖拽、键盘导航、滚动位置全部保持原生行为。
  */
 const { Plugin, Notice } = require('obsidian');
 
@@ -22,106 +25,99 @@ const CN_UNITS = { '十': 10, '百': 100, '千': 1000 };
 
 function cnToInt(s) {
   let total = 0, sec = 0;
-  for (const ch of s) {
-    if (ch in CN_DIGITS) sec = CN_DIGITS[ch];
-    else if (ch in CN_UNITS) { const u = CN_UNITS[ch]; total += (sec || 1) * u; sec = 0; }
-    else if (ch === '万') { total = (total + sec) * 10000; sec = 0; }
-    else if (ch === '亿') { total = (total + sec) * 100000000; sec = 0; }
-    else return null;
+  for (const ch of String(s)) {
+    if (Object.prototype.hasOwnProperty.call(CN_DIGITS, ch)) {
+      sec = CN_DIGITS[ch];
+    } else if (Object.prototype.hasOwnProperty.call(CN_UNITS, ch)) {
+      total += (sec || 1) * CN_UNITS[ch];
+      sec = 0;
+    } else if (ch === '万') {
+      total = (total + sec) * 10000;
+      sec = 0;
+    } else if (ch === '亿') {
+      total = (total + sec) * 100000000;
+      sec = 0;
+    } else {
+      return null;
+    }
   }
   return total + sec;
 }
 
-// ---------------------------------------------------------------------------
-// 从名称提取排序数字；无法提取返回 null（退回自然字符串比较）
-// ---------------------------------------------------------------------------
-function extractNum(name) {
+// 「第X章」「一、绪论」这类中文序号 -> 整数；识别不出返回 null
+const RE_CHAPTER = /第\s*([零〇一二两三四五六七八九十百千万亿]+)\s*[章节卷篇回部节集]/;
+const RE_LEADING = /^\s*([零〇一二两三四五六七八九十百千万亿]+)\s*[、.．,，:：\s]/;
+
+function cnOrder(name) {
   if (!name) return null;
-  let m = name.match(/第([零〇一二两三四五六七八九十百千]+)[章节卷篇回部节]/);
+  let m = name.match(RE_CHAPTER);
   if (m) { const n = cnToInt(m[1]); if (n != null) return n; }
-  m = name.match(/第(\d+)[章节卷篇回部节]/);
-  if (m) return parseInt(m[1], 10);
-  m = name.match(/(?:lecture|lesson)\s*(\d+)/i);
-  if (m) return parseInt(m[1], 10);
-  m = name.match(/^(\d+)[._\-]/);
-  if (m) return parseInt(m[1], 10);
-  m = name.match(/(\d+)/);
-  if (m) return parseInt(m[1], 10);
+  m = name.match(RE_LEADING);
+  if (m) { const n = cnToInt(m[1]); if (n != null) return n; }
   return null;
 }
 
+// 与 Obsidian 完全一致的兜底比较器（它在 app.asar 里用的就是这个）
+const collator = new Intl.Collator(undefined, { usage: 'sort', sensitivity: 'base', numeric: true });
+
 // ---------------------------------------------------------------------------
-// 自然字符串比较
+// 条目比较：文件夹在前 -> 中文序号 -> 兜底原生比较
 // ---------------------------------------------------------------------------
-function tokenize(s) {
-  const re = /(\d+)|(\D+)/g;
-  const out = [];
-  let m;
-  while ((m = re.exec(s)) !== null) out.push(m[1] != null ? +m[1] : m[2]);
-  return out;
+function isFolderFile(f) { return !!(f && Array.isArray(f.children)); }
+
+function itemName(item) {
+  if (!item) return '';
+  if (item.file && item.file.name) return item.file.name;
+  return String(item.name || item.title || '');
 }
 
-function natCompare(a, b) {
-  const ta = tokenize(a), tb = tokenize(b);
-  const n = Math.max(ta.length, tb.length);
-  for (let i = 0; i < n; i++) {
-    const x = ta[i], y = tb[i];
-    if (x === undefined) return -1;
-    if (y === undefined) return 1;
-    if (typeof x === 'number' && typeof y === 'number') {
-      if (x !== y) return x - y;
-    } else if (typeof x === 'number') {
-      return -1;
-    } else if (typeof y === 'number') {
-      return 1;
-    } else if (x !== y) {
-      return x < y ? -1 : 1;
+function compareItems(a, b) {
+  const fa = isFolderFile(a && a.file), fb = isFolderFile(b && b.file);
+  if (fa !== fb) return fa ? -1 : 1;
+
+  const na = itemName(a), nb = itemName(b);
+  const ka = cnOrder(na), kb = cnOrder(nb);
+  if (ka != null && kb != null) {
+    if (ka !== kb) return ka - kb;
+    return collator.compare(na, nb);
+  }
+  if (ka != null) return -1;
+  if (kb != null) return 1;
+  return collator.compare(na, nb);
+}
+
+// ---------------------------------------------------------------------------
+// 接管 FileExplorerView.getSortedFolderItems
+// ---------------------------------------------------------------------------
+const PATCH_FLAG = '__cnNatSortPatched';
+const ORIG_FLAG = '__cnNatSortOriginal';
+
+function patchSort(holder) {
+  if (!holder || holder[PATCH_FLAG]) return false;
+  const original = holder.getSortedFolderItems;
+  if (typeof original !== 'function' || original[ORIG_FLAG]) return false;
+
+  const patched = function (folder) {
+    const items = original.call(this, folder);
+    if (Array.isArray(items) && items.length > 1) {
+      // 原数组就是建树用的顺序，原地重排即可，不改变其内容
+      items.sort(compareItems);
     }
-  }
-  return 0;
+    return items;
+  };
+  patched[ORIG_FLAG] = original;
+
+  holder.getSortedFolderItems = patched;
+  holder[PATCH_FLAG] = true;
+  return true;
 }
 
-function basename(path) { return String(path || '').split('/').pop() || ''; }
-
-function compareInfo(a, b) {
-  if (a.num != null && b.num != null) {
-    if (a.num !== b.num) return a.num - b.num;
-    return natCompare(a.name, b.name);
-  }
-  if (a.num != null) return -1;
-  if (b.num != null) return 1;
-  return natCompare(a.name, b.name);
-}
-
-// ---------------------------------------------------------------------------
-// DOM 辅助：从带 data-path 的元素反查「条目元素」
-// ---------------------------------------------------------------------------
-function itemElementOf(de) {
-  const cls = de.classList;
-  if (cls && (cls.contains('tree-item') || cls.contains('nav-file') || cls.contains('nav-folder'))) {
-    return de;
-  }
-  const t = de.closest ? de.closest('.tree-item') : null;
-  if (t) return t;
-  return de.parentElement;
-}
-
-function nameOf(de, itemEl) {
-  const p = de.getAttribute('data-path') || (itemEl && itemEl.getAttribute('data-path')) || '';
-  if (p) return basename(p).replace(/\.[A-Za-z0-9]+$/, '');
-  const t = (itemEl || de).querySelector
-    ? (itemEl || de).querySelector('.tree-item-inner, .nav-file-title-content, .nav-folder-title-content')
-    : null;
-  return t ? String(t.textContent || '').trim() : '';
-}
-
-function isFolderEl(itemEl, path) {
-  const cls = itemEl.classList;
-  if (cls) {
-    if (cls.contains('nav-folder')) return true;
-    if (cls.contains('nav-file')) return false;
-  }
-  return !/\.[A-Za-z0-9]+$/.test(String(path || ''));
+function unpatchSort(holder) {
+  if (!holder || !holder[PATCH_FLAG]) return false;
+  const current = holder.getSortedFolderItems;
+  if (current && current[ORIG_FLAG]) holder.getSortedFolderItems = current[ORIG_FLAG];
+  delete holder[PATCH_FLAG];
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,128 +125,112 @@ function isFolderEl(itemEl, path) {
 // ---------------------------------------------------------------------------
 class CNNaturalSort extends Plugin {
   onload() {
-    this.container = null;
-    this.observer = null;
-    this._timer = null;
+    this._holder = null;
     this._retries = 0;
-    try { new Notice('中文自然排序已加载'); } catch (e) { /* ignore */ }
+    this._warned = false;
 
-    this.app.workspace.onLayoutReady(() => this.start());
-    this.registerEvent(this.app.workspace.on('layout-change', () => this.schedule()));
-    this.registerEvent(this.app.workspace.on('file-open', () => this.schedule()));
+    // 文件增删改时 Obsidian 自己会调 requestSort，这里只需负责接管 + 首次重排
+    this.app.workspace.onLayoutReady(() => this.install());
+    this.registerEvent(this.app.workspace.on('layout-change', () => this.install()));
 
     this.addCommand({
       id: 'resort',
       name: '重新按中文自然排序整理',
       callback: () => {
-        const r = this.resortAll();
-        if (r) new Notice(`已整理：${r.moved} 个目录 / ${r.items} 项`);
-        else new Notice('未找到文件浏览器容器');
+        if (this.resort()) new Notice('中文自然排序：已重新整理');
+        else new Notice('中文自然排序：未找到文件浏览器');
       },
     });
     this.addCommand({
       id: 'diagnose',
-      name: '诊断：输出当前文件浏览器顺序',
+      name: '诊断：输出当前排序（到控制台与提示）',
       callback: () => this.diagnose(),
     });
-    this.addRibbonIcon('sort-asc', '中文自然排序：点击强制整理', () => {
-      const r = this.resortAll();
-      if (r) new Notice(`已整理：${r.moved} 个目录 / ${r.items} 项`);
+    this.addRibbonIcon('sort-asc', '中文自然排序：重新整理', () => {
+      if (this.resort()) new Notice('中文自然排序：已重新整理');
     });
-    this.register(() => this.stop());
   }
 
-  // 找到文件浏览器的容器；若尚未打开，做有限重试
-  start() {
+  onunload() {
+    if (this._holder) unpatchSort(this._holder);
+    this._holder = null;
+    const view = this.fileExplorerView();
+    if (view) this.resort();
+  }
+
+  fileExplorerView() {
     const leaves = this.app.workspace.getLeavesOfType('file-explorer') || [];
-    const view = leaves.length ? leaves[0].view : null;
-    const container = view && view.containerEl ? view.containerEl : null;
-    if (!container) {
-      if (this._retries < 20) { this._retries++; setTimeout(() => this.start(), 300); }
+    return leaves.length ? leaves[0].view : null;
+  }
+
+  // 拿到文件浏览器后，把排序入口换成我们的实现
+  install() {
+    if (this._holder) return true;
+    const view = this.fileExplorerView();
+    if (!view) {
+      if (this._retries < 40) { this._retries++; setTimeout(() => this.install(), 250); }
+      return false;
+    }
+    // 方法在原型上（新开的窗口也会走同一份原型，一次patch终身生效）
+    const holder = typeof view.getSortedFolderItems === 'function'
+      ? (Object.getPrototypeOf(view) && typeof Object.getPrototypeOf(view).getSortedFolderItems === 'function'
+        ? Object.getPrototypeOf(view)
+        : view)
+      : null;
+    if (!patchSort(holder)) {
+      if (!this._warned) {
+        this._warned = true;
+        new Notice('中文自然排序：当前 Obsidian 版本不兼容（找不到排序入口）', 8000);
+        console.error('[CN Natural Sort] 找不到 FileExplorerView.getSortedFolderItems，无法接管排序');
+      }
+      return false;
+    }
+    this._holder = holder;
+    this.resort();
+    return true;
+  }
+
+  // 让 Obsidian 自己重排一次（它内置的 requestSort 带 20ms 防抖）
+  resort() {
+    const view = this.fileExplorerView();
+    if (!view) return false;
+    try {
+      if (typeof view.requestSort === 'function') view.requestSort();
+      else if (typeof view.sort === 'function') view.sort();
+      else return false;
+    } catch (e) {
+      console.error('[CN Natural Sort] 重排失败', e);
+      return false;
+    }
+    return true;
+  }
+
+  diagnose() {
+    const view = this.fileExplorerView();
+    if (!view) { new Notice('未找到文件浏览器'); return; }
+    if (typeof view.getSortedFolderItems !== 'function') {
+      new Notice('当前版本没有 getSortedFolderItems，插件未接管');
       return;
     }
-    this.container = container;
-    if (!this.observer) {
-      this.observer = new MutationObserver(() => this.schedule());
-      this.observer.observe(container, { childList: true, subtree: true });
-    }
-    this.resortAll();
-  }
+    const lines = [];
+    const root = this.app.vault.getRoot();
+    const dump = (label, folder) => {
+      try {
+        const names = view.getSortedFolderItems(folder).map(itemName);
+        if (names.length > 1) lines.push(`${label}（${names.length}）: ${names.slice(0, 12).join(' | ')}`);
+      } catch (e) { /* 单个目录出错不影响其余输出 */ }
+    };
+    dump('根目录', root);
+    // 挑一个含「第X章」的文件夹，验证中文序是否真的生效
+    const target = root.children
+      .filter((c) => Array.isArray(c.children))
+      .find((c) => c.children.some((f) => cnOrder(f.name) != null));
+    if (target) dump(target.path, target);
 
-  stop() {
-    if (this.observer) { this.observer.disconnect(); this.observer = null; }
-    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
-  }
-
-  schedule() {
-    if (this._timer) return;
-    this._timer = setTimeout(() => { this._timer = null; this.resortAll(); }, 60);
-  }
-
-  resortAll() {
-    const container = this.container || this.findContainer();
-    if (!container) return null;
-
-    // 按「父元素 = 子项容器」分组，不依赖具体类名
-    const groups = new Map();
-    const dataEls = container.querySelectorAll('[data-path]');
-    for (const de of Array.from(dataEls)) {
-      const item = itemElementOf(de);
-      if (!item || !item.parentElement) continue;
-      const parent = item.parentElement;
-      if (!groups.has(parent)) groups.set(parent, []);
-      groups.get(parent).push({ de, el: item });
-    }
-
-    let containers = 0, items = 0, moved = 0;
-    for (const [parent, list] of groups) {
-      if (list.length < 2) continue;
-      containers++; items += list.length;
-      const infos = list.map((o) => {
-        const path = o.de.getAttribute('data-path') || '';
-        const name = nameOf(o.de, o.el);
-        return { el: o.el, name, num: extractNum(name), folder: isFolderEl(o.el, path) };
-      });
-      const folders = infos.filter((x) => x.folder).sort(compareInfo);
-      const files = infos.filter((x) => !x.folder).sort(compareInfo);
-      const desired = folders.concat(files).map((x) => x.el);
-      const current = Array.from(parent.children);
-      // 已有序则不动，避免产生无谓的 DOM 变更触发循环
-      if (current.length === desired.length && desired.every((el, i) => current[i] === el)) continue;
-      desired.forEach((el) => parent.appendChild(el));
-      moved++;
-    }
-    return { containers, items, moved };
-  }
-
-  findContainer() {
-    const leaves = this.app.workspace.getLeavesOfType('file-explorer') || [];
-    const view = leaves.length ? leaves[0].view : null;
-    return view && view.containerEl ? view.containerEl : null;
-  }
-
-  // 诊断：把当前文件浏览器里所有条目的显示顺序打印出来，便于确认插件是否真的在工作
-  diagnose() {
-    const container = this.container || this.findContainer();
-    if (!container) { new Notice('未找到文件浏览器'); return; }
-    const groups = new Map();
-    const dataEls = container.querySelectorAll('[data-path]');
-    for (const de of Array.from(dataEls)) {
-      const item = itemElementOf(de);
-      if (!item || !item.parentElement) continue;
-      const parent = item.parentElement;
-      if (!groups.has(parent)) groups.set(parent, []);
-      groups.get(parent).push(nameOf(de, item));
-    }
-    let lines = [];
-    for (const [, names] of groups) {
-      if (names.length < 2) continue;
-      lines.push(names.slice(0, 12).join(' | '));
-      if (lines.length >= 3) break;
-    }
     const msg = lines.length ? lines.join('\n—\n') : '未找到可排序的目录';
     try { new Notice(msg, 20000); } catch (e) { /* ignore */ }
     console.log('[CN Natural Sort] 当前顺序:\n' + msg);
+    return msg;
   }
 }
 
@@ -259,7 +239,10 @@ module.exports = CNNaturalSort;
 module.exports.default = CNNaturalSort;
 // 暴露纯函数，便于在 Node 下做单元测试
 module.exports.cnToInt = cnToInt;
-module.exports.extractNum = extractNum;
-module.exports.natCompare = natCompare;
-module.exports.itemElementOf = itemElementOf;
-module.exports.nameOf = nameOf;
+module.exports.cnOrder = cnOrder;
+module.exports.compareItems = compareItems;
+module.exports.itemName = itemName;
+module.exports.isFolderFile = isFolderFile;
+module.exports.patchSort = patchSort;
+module.exports.unpatchSort = unpatchSort;
+module.exports.ORIG_FLAG = ORIG_FLAG;
