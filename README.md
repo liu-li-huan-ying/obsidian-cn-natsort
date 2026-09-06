@@ -1,71 +1,63 @@
 # CN Natural Sort
 
-Obsidian 社区插件（中文名：中文自然排序）。让**文件浏览器（左侧文件列表）**按中文数字自然排序：
+Sort the file explorer by Chinese numerals.
+
+> 中文名：中文自然排序。让文件浏览器按中文数字「第X章 / 第X节」自然排序。
+
+## English
+
+The file explorer (left sidebar) orders items by Unicode code points, so Chinese
+numerals like 第一章, 第二章 … 第十章 end up out of order. This plugin makes them sort
+numerically:
 
 ```
-Obsidian 默认（按 Unicode 码点）      本插件
-─────────────────────────────       ─────────────────────────────
-第一章                               第一章
-第三章                               第二章
-第二章                               第三章
-第十章                               第十章
+Obsidian default (by code point)      CN Natural Sort
+─────────────────────────────────      ─────────────────────────────────
+第一章                                 第一章
+第三章                                 第二章
+第二章                                 第三章
+第十章                                 第十章
 ```
+
+- No file renaming, no content edits, zero configuration.
+- Folders are still listed before files.
+- Names without Chinese numerals keep the native ordering
+  (e.g. `Lecture 2 < Lecture 9 < Lecture 10`).
+
+### Installation
+
+1. Turn off Restricted Mode: **Settings → Community plugins → turn off Restricted Mode**.
+2. Open **Community plugins → Browse**, search for **CN Natural Sort**, and enable it.
+   (Alternatively, install via BRAT using the repository URL.)
+3. The file explorer re-sorts immediately.
+
+### Usage
+
+Nothing to configure. Once enabled, the file explorer sorts itself. To force a re-sort,
+run the command **"CN Natural Sort: re-sort"** (or click the ribbon icon).
+
+## 中文
+
+Obsidian 社区插件。让**文件浏览器（左侧文件列表）**按中文数字自然排序：
 
 - **不改文件名、不改文件内容、不写 frontmatter、不需要任何配置**
 - 文件夹仍然排在文件之前
-- 英文/阿拉伯数字沿用 Obsidian 原生排序（`Lecture 2 < Lecture 9 < Lecture 10`）
+- 英文/阿拉伯数字沿用原生排序（`Lecture 2 < Lecture 9 < Lecture 10`）
 
-## 排序规则
+### 排序规则
 
-对每一层的条目，按以下顺序决定先后：
+对每一层条目：
 
-1. **文件夹在前，文件在后**
-2. 名字里有中文序号的排在前面（没有序号的在后），序号按数值大小排：
-   - `第X章 / 第X节 / 第X卷 / 第X篇 / 第X回 / 第X部 / 第X集`
-     （支持 一 ~ 九十九、一百零五、一百二十三、一万二千……）
-   - 行首中文序号：`一、绪论`、`十一、总结`
-3. 其余情况**完全交给 Obsidian 原生比较器**
-   （`Intl.Collator({ numeric: true })`），因此 `Lecture 10`、`第10章`、`01_高等数学`
-   这些本来就排得对的名字，行为与未安装插件时一模一样
+1. 文件夹在前，文件在后
+2. 有中文序号的排在前面，按数值大小排：`第X章 / 第X节 / 第X卷 / 第X篇 / 第X回 / 第X部 / 第X集`、行首 `一、绪论`
+3. 其余交给原生比较器（`Intl.Collator({ numeric: true })`），行为与未安装时一致
 
-## 安装 / 启用
+### 安装
 
-1. 关闭「限制模式」：设置 → 第三方插件 → 关闭「限制模式」。
-2. 插件目录：`<仓库>/.obsidian/plugins/cn-natsort/`（`main.js` + `manifest.json` + `styles.css`）。
-3. 设置 → 第三方插件 → 找到「CN Natural Sort」→ 启用。
-4. 启用后文件浏览器立即重排。也可点左侧栏排序图标，或命令面板执行
-   「重新按中文自然排序整理」。
+1. 设置 → 第三方插件 → 关闭限制模式
+2. 社区插件列表搜索 **CN Natural Sort** 并启用（或用 BRAT 通过仓库地址安装）
+3. 文件浏览器立即重排
 
-需要确认是否真的生效时，执行命令「诊断：输出当前排序」——会把根目录与第一个
-含「第X章」的文件夹的**实际排序结果**打到提示条和控制台（`Ctrl+Shift+I` 查看）。
+### 使用
 
-## 实现原理
-
-不碰 DOM。文件浏览器对根目录和每一个子文件夹都只会调用同一个方法：
-
-```js
-FileExplorerView.prototype.getSortedFolderItems(folder) -> 条目数组（建树用的顺序）
-```
-
-插件把这个方法包一层：先让 Obsidian 按自己的规则算出来，再把返回的数组按中文
-自然序重排一次，然后原样交回。Obsidian 照常建树、照常虚拟滚动。
-
-> 早期版本（1.0.x）是拿到 DOM 节点后 `appendChild` 重排的。文件浏览器是**虚拟滚动**
-> 的，容器里有一个撑高的 `pusherEl`，把它顶到前面会导致滚动高度与条目回收错乱，
-> 表现为「点击无法展开/折叠」。1.1.0 起彻底不再操作 DOM。
-
-- 卸载/禁用：恢复原方法并重新排序，文件浏览器回到 Obsidian 默认顺序（插件显示名：CN Natural Sort）。
-- 若当前 Obsidian 版本找不到该排序入口，插件会提示不兼容，其余功能不受影响。
-
-## 冲突提示
-
-与其他「自定义文件浏览器排序」类插件（如 Custom File Explorer sorting）同时启用
-会互相打架，建议只保留一个。
-
-## 测试
-
-```bash
-node test/run-tests.js
-```
-
-覆盖汉字数字解析、序号识别、条目排序、以及「接管/还原排序入口」的行为。
+无需配置。启用后文件浏览器自动排序；如需强制重排，运行命令「CN Natural Sort: re-sort」或点左侧栏图标。

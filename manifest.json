@@ -3,7 +3,7 @@
   "name": "CN Natural Sort",
   "version": "1.1.0",
   "minAppVersion": "1.4.0",
-  "description": "让文件浏览器按「第一章 / 第二章 / 第十章」的中文数字自然排序。不改文件名、不改内容、零配置，直接接管 Obsidian 自身的排序逻辑。",
+  "description": "Sorts the file explorer by Chinese numerals, so 第一章, 第二章 and 第十章 appear in numeric order. No file renaming, no content edits, and zero configuration — it hooks into the explorer's own sort routine.",
   "author": "liu-li-huan-ying",
   "authorUrl": "https://github.com/liu-li-huan-ying",
   "isDesktopOnly": false
