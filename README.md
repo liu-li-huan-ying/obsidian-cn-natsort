@@ -1,6 +1,6 @@
-# 中文自然排序 (CN Natural Sort)
+# CN Natural Sort
 
-Obsidian 社区插件。让**文件浏览器（左侧文件列表）**按中文数字自然排序：
+Obsidian 社区插件（中文名：中文自然排序）。让**文件浏览器（左侧文件列表）**按中文数字自然排序：
 
 ```
 Obsidian 默认（按 Unicode 码点）      本插件
@@ -32,7 +32,7 @@ Obsidian 默认（按 Unicode 码点）      本插件
 
 1. 关闭「限制模式」：设置 → 第三方插件 → 关闭「限制模式」。
 2. 插件目录：`<仓库>/.obsidian/plugins/cn-natsort/`（`main.js` + `manifest.json` + `styles.css`）。
-3. 设置 → 第三方插件 → 找到「中文自然排序 (CN Natural Sort)」→ 启用。
+3. 设置 → 第三方插件 → 找到「CN Natural Sort」→ 启用。
 4. 启用后文件浏览器立即重排。也可点左侧栏排序图标，或命令面板执行
    「重新按中文自然排序整理」。
 
@@ -54,7 +54,7 @@ FileExplorerView.prototype.getSortedFolderItems(folder) -> 条目数组（建树
 > 的，容器里有一个撑高的 `pusherEl`，把它顶到前面会导致滚动高度与条目回收错乱，
 > 表现为「点击无法展开/折叠」。1.1.0 起彻底不再操作 DOM。
 
-- 卸载/禁用：恢复原方法并重新排序，文件浏览器回到 Obsidian 默认顺序。
+- 卸载/禁用：恢复原方法并重新排序，文件浏览器回到 Obsidian 默认顺序（插件显示名：CN Natural Sort）。
 - 若当前 Obsidian 版本找不到该排序入口，插件会提示不兼容，其余功能不受影响。
 
 ## 冲突提示
