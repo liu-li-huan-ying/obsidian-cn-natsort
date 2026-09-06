@@ -4,6 +4,6 @@
   "version": "1.0.0",
   "minAppVersion": "0.15.0",
   "description": "让文件浏览器按「第X章 / 第X节」等中文数字自然排序，无需改名、不改内容。同时兼容阿拉伯数字、Lecture NN、数字前缀等常见模式。",
-  "author": "WorkBuddy",
+  "author": "liu-li-huan-ying",
   "isDesktopOnly": false
 }
