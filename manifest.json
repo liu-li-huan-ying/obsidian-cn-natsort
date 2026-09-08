@@ -1,7 +1,7 @@
 {
   "id": "cn-natsort",
   "name": "CN Natural Sort",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "minAppVersion": "1.4.0",
   "description": "Sorts the file explorer with Chinese-aware natural ordering: 第一章, 第二章 and 第十章 in numeric order. Arabic, Chinese and Roman numerals are compared by value, including multi-level names. No renaming or config — it hooks the explorer own sort.",
   "author": "liu-li-huan-ying",
