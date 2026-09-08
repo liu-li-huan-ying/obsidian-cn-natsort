@@ -44,15 +44,19 @@ function cnToInt(s) {
   return total + sec;
 }
 
-// 「第X章」「一、绪论」这类中文序号 -> 整数；识别不出返回 null
+// 「第X章」「一、绪论」「笔记（一）」这类中文序号 -> 整数；识别不出返回 null
 const RE_CHAPTER = /第\s*([零〇一二两三四五六七八九十百千万亿]+)\s*[章节卷篇回部节集]/;
 const RE_LEADING = /^\s*([零〇一二两三四五六七八九十百千万亿]+)\s*[、.．,，:：\s]/;
+// 全角/半角括号包裹的中文数字（取首个匹配），如「笔记（一）」「第（一）期」
+const RE_PARENS  = /[（(]([零〇一二两三四五六七八九十百千万亿]+)[)）]/;
 
 function cnOrder(name) {
   if (!name) return null;
   let m = name.match(RE_CHAPTER);
   if (m) { const n = cnToInt(m[1]); if (n != null) return n; }
   m = name.match(RE_LEADING);
+  if (m) { const n = cnToInt(m[1]); if (n != null) return n; }
+  m = name.match(RE_PARENS);
   if (m) { const n = cnToInt(m[1]); if (n != null) return n; }
   return null;
 }

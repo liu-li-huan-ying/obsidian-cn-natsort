@@ -71,6 +71,16 @@ it('不以中文数字开头的普通中文名不误判', () => {
   assert.strictEqual(cnOrder('三体'), null);
   assert.strictEqual(cnOrder('读书笔记'), null);
 });
+it('全角/半角括号包裹的中文数字识别（笔记（一）系列）', () => {
+  assert.strictEqual(cnOrder('笔记（一）：导学与准备篇'), 1);
+  assert.strictEqual(cnOrder('笔记（二）：第一单元·基础剪辑全流程'), 2);
+  assert.strictEqual(cnOrder('笔记（三）：第二单元·专业工具篇'), 3);
+  assert.strictEqual(cnOrder('笔记（四）：第三单元·复刻实战篇'), 4);
+  // 半角括号
+  assert.strictEqual(cnOrder('章节(一)'), 1);
+  // 取首个匹配
+  assert.strictEqual(cnOrder('随笔（三十）个样本'), 30);
+});
 
 console.log('\n[3] 条目排序');
 const file = (name) => ({ file: { name, extension: 'md' } });
@@ -95,6 +105,21 @@ it('中文序号整体上浮，其余按原生序兜底', () => {
   const items = [file('附录'), file('第三章'), file('第二章'), file('笔记')];
   const got = items.slice().sort(compareItems).map(itemName);
   assert.deepStrictEqual(got.slice(0, 2), ['第二章', '第三章']);
+});
+it('「笔记（一/二/三/四）」按数值升序（不再是拼音序）', () => {
+  const items = [
+    file('笔记（一）：导学与准备篇'),
+    file('笔记（二）：第一单元·基础剪辑全流程'),
+    file('笔记（三）：第二单元·专业工具篇'),
+    file('笔记（四）：第三单元·复刻实战篇'),
+  ];
+  const got = items.slice().sort(compareItems).map(itemName);
+  assert.deepStrictEqual(got, [
+    '笔记（一）：导学与准备篇',
+    '笔记（二）：第一单元·基础剪辑全流程',
+    '笔记（三）：第二单元·专业工具篇',
+    '笔记（四）：第三单元·复刻实战篇',
+  ]);
 });
 it('排序稳定且自反', () => {
   const items = ['第十章', '第一章', '第二章'].map(file);
