@@ -1,9 +1,9 @@
 {
   "id": "cn-natsort",
   "name": "CN Natural Sort",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "minAppVersion": "1.4.0",
-  "description": "Sorts the file explorer by Chinese numerals, so 第一章, 第二章 and 第十章 appear in numeric order. No file renaming, no content edits, and zero configuration — it hooks into the explorer's own sort routine.",
+  "description": "Sorts the file explorer with Chinese-aware natural ordering, so 第一章, 第二章 and 第十章 appear in numeric order. Arabic, Chinese and Roman numerals are compared by value, including multi-level names like 笔记（二）：第一单元. No renaming, no content edits, zero configuration — it hooks the explorer's own sort routine.",
   "author": "liu-li-huan-ying",
   "authorUrl": "https://github.com/liu-li-huan-ying",
   "isDesktopOnly": false
