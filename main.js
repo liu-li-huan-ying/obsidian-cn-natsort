@@ -42,9 +42,10 @@ const { Plugin, Notice } = require('obsidian');
 // 汉字数字 -> 整数（支持简/繁/大写/廿卅卌）
 // ---------------------------------------------------------------------------
 const CN_DIGITS = {
-  '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5,
-  '六': 6, '七': 7, '八': 8, '九': 9,
+  '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '俩': 2, '三': 3, '仨': 3,
+  '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
   '壹': 1, '贰': 2, '叁': 3, '肆': 4, '伍': 5, '陆': 6, '柒': 7, '捌': 8, '玖': 9,
+  '皕': 200,
 };
 const CN_SMALL = { '十': 10, '百': 100, '千': 1000, '拾': 10, '佰': 100, '仟': 1000 };
 const CN_BIG = { '万': 1e4, '萬': 1e4, '亿': 1e8, '億': 1e8 };
@@ -58,20 +59,34 @@ function cnToInt(s) {
   s = String(s);
   if (!s) return null;
   const chars = [...s];
-  let total = 0, section = 0, num = 0;
+
+  // A) 纯「数字字」串（不含任何单位）-> 十进制数位累加
+  //    一九九九=1999、二〇二四=2024、一〇〇=100、壹贰叁=123、三五=35
+  //    旧实现直接覆盖 num，导致「一九九九」只剩 9，年份全错。
+  if (chars.every((c) => has(CN_DIGITS, c))) {
+    let acc = 0;
+    for (const c of chars) acc = acc * 10 + CN_DIGITS[c];
+    return acc;
+  }
+
+  // B) 含单位的复合数值
+  let total = 0, section = 0, num = 0, lastUnit = 0, explicitZero = false;
   for (let i = 0; i < chars.length; i++) {
     const ch = chars[i];
     if (has(CN_DIGITS, ch)) {
+      if (CN_DIGITS[ch] === 0) explicitZero = true; // 「三百零五」显式写了零，别再补位
       num = CN_DIGITS[ch];
     } else if (ch === '廿' || ch === '卅' || ch === '卌') {
       // 廿=20 卅=30 卌=40，本身等于「数字×十」
       section += ch === '廿' ? 20 : ch === '卅' ? 30 : 40;
       num = 0;
+      lastUnit = 10;
     } else if (has(CN_SMALL, ch)) {
       const u = CN_SMALL[ch];
-      if (u === 10 && num === 0) num = 1; // 「十」= 1×10
+      if (num === 0 && section === 0) num = 1; // 「十」=1×10、「百二十三」=123，前导单位视作系数 1
       section += num * u;
       num = 0;
+      lastUnit = u;
     } else if (has(CN_BIG, ch)) {
       // 「万一」「亿分」这类语素保护：万/亿前无系数、后面还跟数字 -> 不是数字串
       if (num === 0 && section === 0 && i !== chars.length - 1) return null;
@@ -79,13 +94,20 @@ function cnToInt(s) {
       total += section;
       section = 0;
       num = 0;
+      lastUnit = CN_BIG[ch];
     } else {
       return null; // 遇到非数字汉字（第/abc 等）视为非法
     }
   }
-  const v = total + section + num;
+
+  let v = total + section;
+  if (num > 0) {
+    // 尾位省略：三百二 = 三百二十 = 320；一万二 = 一万二千 = 12000。
+    // 但显式写了「零」时不补位：三百零二 = 302（否则两者会撞成同一个值）。
+    v += (lastUnit > 1 && !explicitZero) ? num * (lastUnit / 10) : num;
+  }
   // 解析出 0 且串里没有任何数字字（如孤立的 万/亿/百/千）-> 无效
-  if (v === 0 && !/[零〇一二两三四五六七八九壹贰叁肆伍陆柒捌玖]/.test(s)) return null;
+  if (v === 0 && !/[零〇一二两俩三四五六七八九仨壹贰叁肆伍陆柒捌玖皕]/.test(s)) return null;
   return v;
 }
 
@@ -130,14 +152,27 @@ const ROMAN_PREFIX = new Set([
 ]);
 
 const isCJK = (ch) => !!ch && /[\u2E80-\u2FDF\u3005-\u3007\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/.test(ch);
+// 紧跟在连续「数字字」之后时能坐实「这是年份/编号」的时间/序列单位
+const TIME_UNIT = /^[年月日号期版季周天时分秒旬世载卷章回节篇册集页部届遍]$/;
 // 罗马数字后的合法收尾：行尾或标点/括号（不含空格，避免误伤 "I have a dream"）
 const ROMAN_AFTER = /^[.,，。．、;；:：!！?？\-–—_/\\|()（）\[\]【\]{}<>《》「」『』"'']$/;
 
 // ---------------------------------------------------------------------------
 // token 化：文件名 -> [ {n:1,v,s} 数值段 | {n:0,s} 文本段 ]
 // ---------------------------------------------------------------------------
+// 全角 ASCII（含全角数字 １２３、全角空格）归一到半角：
+// 否则「１２３」会被当成普通文本排在数值区之后，与「123」永远不相邻。
+const HAS_WIDE = /[\uFF01-\uFF5E\u3000]/;
+const WIDE_RE = /[\uFF01-\uFF5E]/g;
+function normalizeWidth(s) {
+  return HAS_WIDE.test(s)
+    ? s.replace(WIDE_RE, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/\u3000/g, ' ')
+    : s;
+}
+
 function naturalKey(name) {
   if (name == null) name = '';
+  name = normalizeWidth(name);
   const key = [];
   let lit = '';
   const flush = () => { if (lit) { key.push({ n: 0, s: lit }); lit = ''; } };
@@ -168,8 +203,17 @@ function naturalKey(name) {
       const atStart = i === 0;
       const prevCJK = isCJK(prev), nextCJK = isCJK(next);
 
+      const chars = [...run];
+      const allDigits = chars.every((c) => has(CN_DIGITS, c));
+
       let treat = false;
-      if (prev === '第') {
+      if (allDigits && chars.length >= 3 && TIME_UNIT.test(next)) {
+        // 年份/编号写法：连续 3 个以上「数字字」且后面紧跟时间单位（二〇二四年、一九九九年第X季度）。
+        // 刻意收得很窄：只看「连续数字」是不够的，会把「七七八八」「三三两两」这类
+        // 全由数字字组成的成语误拆成 7788 / 3322。行尾或分隔符后的数字字串由下面的
+        // 原始规则处理即可（一九九九、 （一九九九） 本就能识别）。
+        treat = true;
+      } else if (prev === '第') {
         treat = true;                 // 「第X章/节/单元…」：即便被汉字夹住也是序数
       } else if (atStart && nextCJK) {
         treat = false;                // 「三体/二手/万一/万有引力」：普通词，不拆数字
@@ -270,6 +314,10 @@ const codePointCmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 function compareKeys(ka, kb) {
   const L = Math.min(ka.length, kb.length);
+  // collator 是 sensitivity:'base'，会把 "V"/"v"、"CH"/"Ch" 判为相等。此时若立刻用码点兜底，
+  // 就会在还没比到后面的数值段前先按大小写分出胜负（导致 V1.10 排在 v1.2 之前）。
+  // 所以把这种「仅写法之别」的次序暂存起来，等所有语义段都比完仍无结果时才用上。
+  let tie = 0;
   for (let i = 0; i < L; i++) {
     const A = ka[i], B = kb[i];
     if (A.n !== B.n) return A.n === 1 ? -1 : 1; // 数值段排在文本段前
@@ -278,20 +326,16 @@ function compareKeys(ka, kb) {
       if (A.s !== B.s) {
         const c = collator.compare(A.s, B.s);
         if (c) return c;
-        const d = codePointCmp(A.s, B.s);
-        if (d) return d;
+        if (!tie) tie = codePointCmp(A.s, B.s);
       }
       continue;
     }
     const c = collator.compare(A.s, B.s);
     if (c) return c;
-    if (A.s !== B.s) {
-      const d = codePointCmp(A.s, B.s);
-      if (d) return d;
-    }
+    if (A.s !== B.s && !tie) tie = codePointCmp(A.s, B.s);
   }
   if (ka.length !== kb.length) return ka.length < kb.length ? -1 : 1; // 前缀短者在前
-  return 0;
+  return tie;
 }
 
 function compareNames(na, nb) {
@@ -337,10 +381,12 @@ function patchSort(holder) {
 
   const patched = function (folder) {
     const items = original.call(this, folder);
-    if (Array.isArray(items) && items.length > 1) {
-      // 原数组就是建树用的顺序，原地重排即可，不改变其内容
-      items.sort(compareItems);
-    }
+    if (!Array.isArray(items) || items.length < 2) return items;
+    // 尊重 Obsidian 原生排序设置：只有「按文件名字母序」时才接管。
+    // 用户选了按修改时间 / 创建时间排序时不插手 —— 否则会静默覆盖原生功能。
+    const order = String((this && this.sortOrder) || '');
+    if (order && !/alphabetical/i.test(order)) return items;
+    items.sort(/reverse/i.test(order) ? (a, b) => compareItems(b, a) : compareItems);
     return items;
   };
   patched[ORIG_FLAG] = original;

@@ -80,6 +80,40 @@ it('语素保护：万一/万二 不当作数字串', () => {
   assert.strictEqual(cnToInt('万一'), null);
   assert.strictEqual(cnToInt('万二'), null);
 });
+it('连续数字字按十进制累加（年份/编号写法）', () => {
+  assert.strictEqual(cnToInt('一九九九'), 1999);
+  assert.strictEqual(cnToInt('二〇二四'), 2024);
+  assert.strictEqual(cnToInt('二〇二三'), 2023);
+  assert.strictEqual(cnToInt('一〇〇'), 100);
+  assert.strictEqual(cnToInt('三五'), 35);
+  assert.strictEqual(cnToInt('壹贰叁'), 123);
+});
+it('尾位省略：三百二=320 与 三百零二=302 不再撞值', () => {
+  assert.strictEqual(cnToInt('三百二'), 320);
+  assert.strictEqual(cnToInt('三百零二'), 302);
+  assert.strictEqual(cnToInt('一万二'), 12000);
+  assert.strictEqual(cnToInt('四千五'), 4500);
+});
+it('前导单位缺省系数：百二十三=123', () => {
+  assert.strictEqual(cnToInt('百二十三'), 123);
+});
+it('口语数字字：俩=2 仨=3 皕=200', () => {
+  assert.strictEqual(cnToInt('俩'), 2);
+  assert.strictEqual(cnToInt('仨'), 3);
+  assert.strictEqual(cnToInt('皕'), 200);
+});
+it('连续数字不被误伤：三五成群 仍是文本', () => {
+  assert.strictEqual(hasNum('三五成群'), false);
+});
+it('年份写法：二〇二四年总结=2024，行尾/括号内的一九九九=1999', () => {
+  assert.deepStrictEqual(numsOf('二〇二四年总结'), [2024]);
+  assert.deepStrictEqual(numsOf('一九九九'), [1999]);
+  assert.deepStrictEqual(numsOf('（一九九九）'), [1999]);
+});
+it('数字字组成的成语带后缀时不拆：三三两两的想法 / 七七八八的东西', () => {
+  assert.strictEqual(hasNum('三三两两的想法'), false);
+  assert.strictEqual(hasNum('七七八八的东西'), false);
+});
 it('非法输入返回 null', () => {
   assert.strictEqual(cnToInt('第'), null);
   assert.strictEqual(cnToInt('abc'), null);
@@ -218,6 +252,21 @@ it('版本号：v1.2 < v1.10', () => {
   const got = ['v1.10', 'v1.2', 'v1.9'].slice().sort(compareNames);
   assert.deepStrictEqual(got, ['v1.2', 'v1.9', 'v1.10']);
 });
+it('大小写不再干扰数值序：v1.2 排在 V1.10 之前', () => {
+  const got = ['V1.10', 'v1.2'].slice().sort(compareNames);
+  assert.deepStrictEqual(got, ['v1.2', 'V1.10']);
+  const mixed = ['CH10', 'Ch2', 'ch10', 'Ch10'].slice().sort(compareNames);
+  assert.strictEqual(mixed[0], 'Ch2'); // 数值 2 最小，与大小写无关
+});
+it('全角数字 １２３ 归为数值并与阿拉伯数字同序', () => {
+  assert.strictEqual(hasNum('１２３'), true);
+  const got = ['１２３', '99', '2'].slice().sort(compareNames);
+  assert.deepStrictEqual(got, ['2', '99', '１２３']);
+});
+it('中文年份（二〇二四）与阿拉伯年份按同一数值序混排', () => {
+  const got = ['二〇二四年总结', '一九九九年总结', '2023年总结'].slice().sort(compareNames);
+  assert.deepStrictEqual(got, ['一九九九年总结', '2023年总结', '二〇二四年总结']);
+});
 it('罗马数字与阿拉伯混排：II(2) < 5 < IX(9) < X(10)', () => {
   const names = ['IX 复习', 'II 基础', 'V 进阶', '10 总结'];
   const got = names.slice().sort(compareNames);
@@ -241,6 +290,23 @@ it('确定性：第1章 vs 第一章 等值段有稳定全序', () => {
   assert.deepStrictEqual(once, twice);
   // 等值段退化为按原串码点（'1' < '一'）
   assert.deepStrictEqual(once, ['第1章', '第一章']);
+});
+it('混合语料排序结果与比较器自洽（严格弱序的实用检验）', () => {
+  // 若比较器不满足传递性，Array.sort 的结果会与比较器自身矛盾（可能出现 A<=B 但排在后面）
+  const corpus = [
+    '第一章', '第1章', 'Chapter I', 'chapter ii', 'v1.2', 'V1.10', 'V1.2', 'v1.10',
+    '二〇二四年', '2024年', '一九九九年', '１２３', '123', 'Ch2', 'CH10', 'Ch10',
+    'a', 'A', 'b', '笔记（一）', '笔记(1)', '第3.2节', '第3.10节', 'Part II',
+    'part x', '三体', '二手', '10', '2', '二', 'Lecture 9', 'Lecture 10', '附录', '甲', '乙',
+  ];
+  const sorted = corpus.slice().sort(compareNames);
+  for (let i = 0; i < sorted.length; i++) {
+    for (let j = i + 1; j < sorted.length; j++) {
+      assert.ok(compareNames(sorted[i], sorted[j]) <= 0, `${sorted[i]} <= ${sorted[j]}`);
+    }
+  }
+  // 重复排序结果必须一致（确定性）
+  assert.deepStrictEqual(corpus.slice().sort(compareNames), sorted);
 });
 it('compareNames 全序/反身/对称抽查', () => {
   const names = ['b', 'a', '2', '10', '十', '（三）', 'x'];
@@ -341,6 +407,35 @@ it('缺少排序入口时 patch 返回 false（不抛异常）', () => {
   assert.strictEqual(patchSort({}), false);
   assert.strictEqual(patchSort(null), false);
   assert.strictEqual(patchSort(undefined), false);
+});
+it('尊重原生排序设置：只有「按文件名字母序」才接管', () => {
+  // 原生 mock 刻意返回一个「按修改时间」的顺序：第二章、第十章、第一章
+  const build = (order) => {
+    const items = ['第十章', '第二章', '第一章'].map((n) => ({ name: n }));
+    return { sortOrder: order, getSortedFolderItems: () => [items[1], items[0], items[2]] };
+  };
+  const names = (h) => h.getSortedFolderItems().map((o) => o.name);
+
+  const alpha = build('alphabetical');
+  patchSort(alpha);
+  assert.deepStrictEqual(names(alpha), ['第一章', '第二章', '第十章']);
+
+  const rev = build('alphabeticalReverse');
+  patchSort(rev);
+  assert.deepStrictEqual(names(rev), ['第十章', '第二章', '第一章']);
+
+  // 关键：按修改时间/创建时间时必须原样放行，不能覆盖成字母序
+  for (const order of ['byModifiedTime', 'byCreatedTime', 'byModifiedTimeReverse']) {
+    const h = build(order);
+    patchSort(h);
+    assert.deepStrictEqual(names(h), ['第二章', '第十章', '第一章'], order);
+  }
+});
+it('未设置 sortOrder 时保持接管（向后兼容）', () => {
+  const items = ['第十章', '第二章', '第一章'].map((n) => ({ name: n }));
+  const h = { getSortedFolderItems: () => [items[1], items[0], items[2]] };
+  patchSort(h);
+  assert.deepStrictEqual(h.getSortedFolderItems().map((o) => o.name), ['第一章', '第二章', '第十章']);
 });
 
 console.log(`\n通过 ${passed} 项\n`);
