@@ -306,10 +306,92 @@ function naturalKey(name) {
 // 与 Obsidian 一致的兜底比较器（拼音、忽略大小写、数字感知）
 const collator = new Intl.Collator(undefined, { usage: 'sort', sensitivity: 'base', numeric: true });
 const keyCache = new Map();
+
+// ---------------------------------------------------------------------------
+// 罗马序列的上下文判定
+// ---------------------------------------------------------------------------
+// 同一批名字里，同一个汉字前缀只允许一套逻辑：要么按罗马数值（卷I/II/.../IX），
+// 要么按字母序（附录A/B/C）。两套逻辑绝不混用 —— 混用会让同一对名字在不同上下文中
+// 得出相反结果，破坏严格弱序（附录V / 附录L / 附录N 同在时会成环）。
+// 汉字前缀 + 紧接的拉丁字母，后面必须是结尾或非字母（.md / 空格 / 标点）
+const CJK_LATIN = /^([\u2E80-\u9FFF]+)([A-Za-z]+)(?![A-Za-z])/;
+
+// 扫一批名字，挑出「应按罗马数值排」的汉字前缀：
+//   - 出现任一个非罗马字母（附录A 的 A） -> 该前缀按字母序
+//   - 全是罗马字母、且至少有一个多字符（II / IX） -> 该前缀按罗马数值
+//   - 全是罗马字母但都是单字符（只有 I / V / X） -> 按字母序（单字母时两种解释顺序一致）
+function detectRomanPrefixes(names) {
+  const seen = new Map();
+  for (const name of names) {
+    if (!name) continue;
+    const m = CJK_LATIN.exec(name);
+    if (!m) continue;
+    const prefix = m[1];
+    const tail = m[2];
+    let g = seen.get(prefix);
+    if (!g) { g = { blocked: false, multi: false }; seen.set(prefix, g); }
+    if (!/^[IVXLCDM]+$/.test(tail) || romanToInt(tail) == null) g.blocked = true;
+    else if (tail.length > 1) g.multi = true;
+  }
+  const out = new Set();
+  seen.forEach((g, prefix) => { if (!g.blocked && g.multi) out.add(prefix); });
+  return out;
+}
+
+// 命中罗马模式时，把「前缀 + 罗马串」拆成 文本段 + 数值段（尾部剩余继续 token 化）
+function keyWithRoman(name, prefixes) {
+  if (!prefixes || !prefixes.size) return null;
+  for (const p of prefixes) {
+    if (name.length <= p.length || name.slice(0, p.length) !== p) continue;
+    const rest = name.slice(p.length);
+    const m = /^([IVXLCDM]+)(?![A-Za-z])/.exec(rest);
+    if (!m) continue;
+    const v = romanToInt(m[1]);
+    if (v == null) continue;
+    const key = [{ n: 0, s: p }, { n: 1, v, s: m[1] }];
+    const tail = rest.slice(m[1].length);
+    if (tail) {
+      const t = naturalKey(tail);
+      for (let i = 0; i < t.length; i++) key.push(t[i]);
+    }
+    return key;
+  }
+  return null;
+}
+
+// 上下文只在一次整批排序期间有效，排完立刻还原（不长期持有、不泄漏到别处）
+let romanSet = null;
+let romanSig = '';
+const romanSignature = (set) => (set && set.size ? Array.from(set).sort().join('\u0001') : '');
+function applyRoman(set, sig) {
+  if (sig === romanSig) return;
+  romanSig = sig;
+  romanSet = set && set.size ? set : null;
+  keyCache.clear();
+}
+
 function cachedKey(name) {
   let k = keyCache.get(name);
-  if (k === undefined) { k = naturalKey(name); keyCache.set(name, k); }
+  if (k === undefined) {
+    k = keyWithRoman(name, romanSet) || naturalKey(name);
+    keyCache.set(name, k);
+  }
   return k;
+}
+
+// 整批排序入口：先按这批名字定上下文，再排（唯一会让上下文生效的地方）
+function sortItems(items, reverse) {
+  if (!Array.isArray(items)) return items;
+  const set = detectRomanPrefixes(items.map(itemName));
+  const prevSet = romanSet;
+  const prevSig = romanSig;
+  applyRoman(set, romanSignature(set));
+  try {
+    items.sort(reverse ? (a, b) => compareItems(b, a) : compareItems);
+  } finally {
+    applyRoman(prevSet, prevSig);
+  }
+  return items;
 }
 
 const codePointCmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -388,7 +470,7 @@ function patchSort(holder) {
     // 用户选了按修改时间 / 创建时间排序时不插手 —— 否则会静默覆盖原生功能。
     const order = String((this && this.sortOrder) || '');
     if (order && !/alphabetical/i.test(order)) return items;
-    items.sort(/reverse/i.test(order) ? (a, b) => compareItems(b, a) : compareItems);
+    sortItems(items, /reverse/i.test(order));
     return items;
   };
   patched[ORIG_FLAG] = original;
@@ -535,4 +617,6 @@ module.exports.itemName = itemName;
 module.exports.isFolderFile = isFolderFile;
 module.exports.patchSort = patchSort;
 module.exports.unpatchSort = unpatchSort;
+module.exports.detectRomanPrefixes = detectRomanPrefixes;
+module.exports.sortItems = sortItems;
 module.exports.ORIG_FLAG = ORIG_FLAG;

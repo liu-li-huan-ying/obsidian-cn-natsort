@@ -22,6 +22,7 @@ const P = require(path.join(__dirname, '..', 'main.js'));
 const {
   cnToInt, romanToInt, naturalKey, compareNames, compareItems,
   isFolderFile, itemName, patchSort, unpatchSort, ORIG_FLAG,
+  sortItems, detectRomanPrefixes,
 } = P;
 
 let passed = 0;
@@ -383,7 +384,56 @@ it('isFolderFile 判定', () => {
   assert.strictEqual(isFolderFile(undefined), false);
 });
 
-console.log('\n[7] 接管排序入口');
+console.log('\n[7] 罗马序列上下文判定（整批排序）');
+// 整批排序入口会给同一汉字前缀选定一套逻辑：罗马数值 或 字母序，二者不混用
+const batchSorted = (names) => sortItems(names.map(file)).map(itemName);
+
+it('全是罗马序列 -> 按罗马数值：卷 I..X（含 IX 减法位）', () => {
+  const want = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'].map((r) => '卷' + r);
+  const names = ['卷V', '卷IX', '卷I', '卷X', '卷III', '卷VIII', '卷II', '卷VII', '卷IV', '卷VI'];
+  assert.deepStrictEqual(batchSorted(names), want);
+});
+it('出现非罗马字母 -> 该前缀按字母序：附录 A B C D J', () => {
+  assert.deepStrictEqual(batchSorted(['附录C', '附录A', '附录J', '附录B', '附录D']),
+    ['附录A', '附录B', '附录C', '附录D', '附录J']);
+});
+it('同一前缀内两套逻辑不混用：附录A + 附录I + 附录II 全按字母', () => {
+  assert.deepStrictEqual(batchSorted(['附录II', '附录A', '附录I']), ['附录A', '附录I', '附录II']);
+});
+it('前缀之间互不影响：同批里「卷」按罗马、「附录」按字母', () => {
+  assert.deepStrictEqual(batchSorted(['卷IX', '卷V', '附录C', '附录A', '卷II']),
+    ['附录A', '附录C', '卷II', '卷V', '卷IX']);
+});
+it('只有单字母罗马时按字母序（I<V<X 两种解释顺序一致）', () => {
+  assert.deepStrictEqual(batchSorted(['表X', '表I', '表V']), ['表I', '表V', '表X']);
+});
+it('汉字 + 罗马 + 扩展名 / 后缀 也能识别', () => {
+  assert.deepStrictEqual(batchSorted(['卷III.md', '卷I.md', '卷IX.md']),
+    ['卷I.md', '卷III.md', '卷IX.md']);
+  assert.deepStrictEqual(batchSorted(['卷II 补充', '卷I 基础', '卷X 尾声']),
+    ['卷I 基础', '卷II 补充', '卷X 尾声']);
+});
+it('detectRomanPrefixes 判定表', () => {
+  assert.deepStrictEqual([...detectRomanPrefixes(['附录A', '附录B'])], []);
+  assert.deepStrictEqual([...detectRomanPrefixes(['卷I', '卷II'])], ['卷']);
+  assert.deepStrictEqual([...detectRomanPrefixes(['表A', '表II'])], []);
+  assert.deepStrictEqual([...detectRomanPrefixes(['附录C', '附录I'])], []);
+  assert.deepStrictEqual([...detectRomanPrefixes(['第一章', '第二章'])], []);
+});
+it('上下文不泄漏：整批排完后再单比 compareNames 仍是无上下文结果', () => {
+  const before = ['卷IX', '卷V'].slice().sort(compareNames);
+  batchSorted(['卷I', '卷II', '卷IX']);
+  const after = ['卷IX', '卷V'].slice().sort(compareNames);
+  assert.deepStrictEqual(before, after);
+});
+it('整批排序幂等（同一批排两次结果一致）', () => {
+  const names = ['卷IX', '卷V', '附录A', '附录C', '表I', '表II', '笔记III', '笔记I', '第一章', '第十章'];
+  const once = batchSorted(names);
+  const twice = sortItems(once.map(file)).map(itemName);
+  assert.deepStrictEqual(twice, once);
+});
+
+console.log('\n[8] 接管排序入口');
 function makeHolder(order) {
   return {
     getSortedFolderItems(folder) {
