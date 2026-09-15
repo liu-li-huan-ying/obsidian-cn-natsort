@@ -193,8 +193,14 @@ it('序数前缀词后：Part II / Lesson IX / Unit X', () => {
   assert.deepStrictEqual(numsOf('Lesson IX 复习'), [9]);
   assert.deepStrictEqual(numsOf('Unit X 尾声'), [10]);
 });
-it('汉字后紧接：笔记II', () => {
-  assert.deepStrictEqual(numsOf('笔记II'), [2]);
+it('汉字后紧接的罗马字母当普通文本：笔记II / 附录C / 方案D / 表L', () => {
+  // 汉字后的字母串几乎都是 A/B/C 式序号，不是罗马数字
+  assert.strictEqual(hasNum('笔记II'), false);
+  assert.strictEqual(hasNum('附录C'), false);
+  assert.strictEqual(hasNum('方案D'), false);
+  assert.strictEqual(hasNum('表L'), false);
+  assert.strictEqual(hasNum('索引M'), false);
+  assert.strictEqual(hasNum('附录I'), false);
 });
 it('反误伤：I have a dream / CIVIL / DLL注入 / CLI 指南 / MIX', () => {
   assert.strictEqual(hasNum('I have a dream'), false);
@@ -278,6 +284,20 @@ it('Chapter 罗马序列：I < II < III < IV < V < IX < X', () => {
   assert.deepStrictEqual(got, [
     'Chapter I', 'Chapter II', 'Chapter III', 'Chapter IV', 'Chapter V', 'Chapter IX', 'Chapter X',
   ]);
+});
+it('汉字 + 字母序号按字母走：附录 / A / B / C / J（C 不再跳到最前）', () => {
+  const names = ['附录C', '附录A', '附录J', '附录B', '附录'];
+  assert.deepStrictEqual(names.slice().sort(compareNames), ['附录', '附录A', '附录B', '附录C', '附录J']);
+});
+it('方案 / 索引 / 表 的字母序号同样不被当成罗马数字', () => {
+  assert.deepStrictEqual(['方案C', '方案A', '方案B'].slice().sort(compareNames), ['方案A', '方案B', '方案C']);
+  assert.deepStrictEqual(['索引D', '索引B', '索引M'].slice().sort(compareNames), ['索引B', '索引D', '索引M']);
+  assert.deepStrictEqual(['表C', '表A', '表L'].slice().sort(compareNames), ['表A', '表C', '表L']);
+});
+it('罗马序列在汉字后按字面仍成立：卷I < II < III < IV < V < X', () => {
+  const names = ['卷V', '卷I', '卷IV', '卷II', '卷X', '卷III'];
+  assert.deepStrictEqual(names.slice().sort(compareNames),
+    ['卷I', '卷II', '卷III', '卷IV', '卷V', '卷X']);
 });
 it('中文「一 基础」与「（二）」混排按数值', () => {
   const got = ['（二）进阶', '一 基础', '（十）尾声'].slice().sort(compareNames);

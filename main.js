@@ -273,11 +273,13 @@ function naturalKey(name) {
             }
           }
 
-          // 序号语境：行首+收尾 / 括号内 / 「前缀词 + 空格」后 / 汉字后紧接
+          // 序号语境：行首+收尾 / 括号内 / 「前缀词 + 空格」后。
+          // 汉字后紧接的一律不算：「附录C」「方案D」「表L」里的字母是 A/B/C 式序号，
+          // 不是罗马数字 100/500/50——误判会让 附录C 跳到 附录A 前面。
+          // 代价：卷IX、第XL章 这类减法位会按字面排（见 README 已知边界）。
           const romanOK = (atStart && (nextEnd || nextSep || (nextSpace && !latinAfterSpace)))
             || (afterOpener && (nextEnd || nextSep))
-            || (prefix && (nextEnd || nextSep || nextSpace))
-            || (prevCJK && (nextEnd || nextSep));
+            || (prefix && (nextEnd || nextSep || nextSpace));
           if (romanOK) {
             flush();
             key.push({ n: 1, v, s: w });
