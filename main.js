@@ -154,6 +154,9 @@ const ROMAN_PREFIX = new Set([
 const isCJK = (ch) => !!ch && /[\u2E80-\u2FDF\u3005-\u3007\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/.test(ch);
 // 紧跟在连续「数字字」之后时能坐实「这是年份/编号」的时间/序列单位
 const TIME_UNIT = /^[年月日号期版季周天时分秒旬世载卷章回节篇册集页部届遍]$/;
+// 「数字字 + 这些单位」= 日期或时长，此时数字一定是真的数字，必须拆。
+// 只取最无歧义的几个；分 / 时 / 秒 / 世 / 载 会撞上「十分」「一时」「一世」这类常用说法，不放行。
+const DATE_UNIT = /^[年月日号季周天]$/;
 // 罗马数字后的合法收尾：行尾或标点/括号（不含空格，避免误伤 "I have a dream"）
 const ROMAN_AFTER = /^[.,，。．、;；:：!！?？\-–—_/\\|()（）\[\]【\]{}<>《》「」『』"'']$/;
 
@@ -207,7 +210,12 @@ function naturalKey(name) {
       const allDigits = chars.every((c) => has(CN_DIGITS, c));
 
       let treat = false;
-      if (allDigits && chars.length >= 3 && TIME_UNIT.test(next)) {
+      if (DATE_UNIT.test(next)) {
+        // 日期/时长语境：十月六日、2026年十月六日、三天、一号、七号。
+        // 数字是真数字，即使被「年 / 月 / 日」夹住也必须拆 —— 否则 2026年十月六日 会
+        // 整段退化成文本，排序退化成拼音序（六日 竟排在 四日 之前）。
+        treat = true;
+      } else if (allDigits && chars.length >= 3 && TIME_UNIT.test(next)) {
         // 年份/编号写法：连续 3 个以上「数字字」且后面紧跟时间单位（二〇二四年、一九九九年第X季度）。
         // 刻意收得很窄：只看「连续数字」是不够的，会把「七七八八」「三三两两」这类
         // 全由数字字组成的成语误拆成 7788 / 3322。行尾或分隔符后的数字字串由下面的
@@ -407,10 +415,12 @@ function compareKeys(ka, kb) {
     if (A.n !== B.n) return A.n === 1 ? -1 : 1; // 数值段排在文本段前
     if (A.n === 1) {
       if (A.v !== B.v) return A.v < B.v ? -1 : 1;
-      if (A.s !== B.s) {
+      // 等值数值段（10 与 十、1 与 一）只是写法不同，不该在这里分出胜负：
+      // 否则「2026年10月16日」会在第 3 段因 "10" < "十" 就整体压过「2026年十月六日」，
+      // 明明后面还有 16 与 6 要比。记成 tie，等所有语义段都比完仍无结果时才用。
+      if (A.s !== B.s && !tie) {
         const c = collator.compare(A.s, B.s);
-        if (c) return c;
-        if (!tie) tie = codePointCmp(A.s, B.s);
+        tie = c || codePointCmp(A.s, B.s);
       }
       continue;
     }

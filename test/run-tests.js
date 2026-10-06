@@ -164,13 +164,27 @@ it('多层序号全部抽出（外层+内层）', () => {
   assert.deepStrictEqual(numsOf('笔记（三）：第二单元·专业工具篇'), [3, 2]);
   assert.deepStrictEqual(numsOf('第一单元 第2节'), [1, 2]);
 });
-it('反误伤：三体/二手/万一/万有引力/十月 不拆数字', () => {
+it('反误伤：三体/二手/万一/万有引力/十一期间/十分满意 不拆数字', () => {
   assert.strictEqual(hasNum('三体'), false);
   assert.strictEqual(hasNum('二手'), false);
   assert.strictEqual(hasNum('万一'), false);
   assert.strictEqual(hasNum('万有引力'), false);
-  assert.strictEqual(hasNum('十月怀胎'), false);
   assert.strictEqual(hasNum('十一期间'), false);
+  // 「分 / 时 / 秒」不在日期白名单：十分满意、三分熟 不会被当成 10 分 / 3 分
+  assert.strictEqual(hasNum('十分满意'), false);
+  assert.strictEqual(hasNum('三分熟'), false);
+});
+it('中文日期：年 / 月 / 日 逐级拆成数值', () => {
+  assert.deepStrictEqual(numsOf('2026年十月六日'), [2026, 10, 6]);
+  assert.deepStrictEqual(numsOf('十月十一日'), [10, 11]);
+  assert.deepStrictEqual(numsOf('九月三十日'), [9, 30]);
+  assert.deepStrictEqual(numsOf('2026年十月六日.md'), [2026, 10, 6]);
+  assert.deepStrictEqual(numsOf('2026年三月一日'), [2026, 3, 1]);
+});
+it('日期白名单不误伤：一时 / 一世 / 一旬 仍按文本', () => {
+  assert.strictEqual(hasNum('一时半刻'), false);
+  assert.strictEqual(hasNum('一世'), false);
+  assert.strictEqual(hasNum('一旬'), false);
 });
 it('阿拉伯数字直接抽数值（含 Lecture 10/v1.10）', () => {
   assert.deepStrictEqual(numsOf('Lecture 10'), [10]);
@@ -309,7 +323,7 @@ it('确定性：第1章 vs 第一章 等值段有稳定全序', () => {
   const once = names.slice().sort(compareNames);
   const twice = names.slice().sort(compareNames).sort(compareNames);
   assert.deepStrictEqual(once, twice);
-  // 等值段退化为按原串码点（'1' < '一'）
+  // 全段等价，退到 tie 才定序（'1' < '一'，等值数值段不抢先分胜负）
   assert.deepStrictEqual(once, ['第1章', '第一章']);
 });
 it('混合语料排序结果与比较器自洽（严格弱序的实用检验）', () => {
@@ -319,6 +333,7 @@ it('混合语料排序结果与比较器自洽（严格弱序的实用检验）'
     '二〇二四年', '2024年', '一九九九年', '１２３', '123', 'Ch2', 'CH10', 'Ch10',
     'a', 'A', 'b', '笔记（一）', '笔记(1)', '第3.2节', '第3.10节', 'Part II',
     'part x', '三体', '二手', '10', '2', '二', 'Lecture 9', 'Lecture 10', '附录', '甲', '乙',
+    '2026年十月六日', '2026年10月6日', '十月六日', '十日', '三日', '十号', '三天', '十一月一日',
   ];
   const sorted = corpus.slice().sort(compareNames);
   for (let i = 0; i < sorted.length; i++) {
@@ -388,6 +403,14 @@ console.log('\n[7] 罗马序列上下文判定（整批排序）');
 // 整批排序入口会给同一汉字前缀选定一套逻辑：罗马数值 或 字母序，二者不混用
 const batchSorted = (names) => sortItems(names.map(file)).map(itemName);
 
+it('中英文日期按同一数值轴混排', () => {
+  const got = ['2026年十月六日', '2026年10月16日', '2026年9月30日', '2026年十月十一日'].slice().sort(compareNames);
+  assert.deepStrictEqual(got, ['2026年9月30日', '2026年十月六日', '2026年十月十一日', '2026年10月16日']);
+});
+it('中文日期整批排序：九月 < 十月一日 < 十月四日 < 十月六日 < 十月十一日 < 十一月一日', () => {
+  const got = batchSorted(['十月六日', '十一月一日', '十月一日', '九月三十日', '十月四日', '十月十一日']);
+  assert.deepStrictEqual(got, ['九月三十日', '十月一日', '十月四日', '十月六日', '十月十一日', '十一月一日']);
+});
 it('全是罗马序列 -> 按罗马数值：卷 I..X（含 IX 减法位）', () => {
   const want = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'].map((r) => '卷' + r);
   const names = ['卷V', '卷IX', '卷I', '卷X', '卷III', '卷VIII', '卷II', '卷VII', '卷IV', '卷VI'];
