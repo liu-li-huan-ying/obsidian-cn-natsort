@@ -31,9 +31,9 @@ function it(name, fn) {
   catch (e) { console.error('  FAIL ' + name + '\n       ' + e.message); process.exitCode = 1; }
 }
 // name -> 是否含数值段
-const hasNum = (name) => naturalKey(name).some((s) => s.n === 1);
+const hasNum = (name) => P.keyOf(name).some((s) => s.n === 1);
 // name -> 各数值段组成的数组
-const numsOf = (name) => naturalKey(name).filter((s) => s.n === 1).map((s) => s.v);
+const numsOf = (name) => P.keyOf(name).filter((s) => s.n === 1).map((s) => s.v);
 const file = (name) => ({ file: { name, extension: 'md' } });
 const folder = (name) => ({ file: { name, children: [] } });
 const sortedNames = (names, mapFn) => names.map(mapFn).slice().sort(compareItems).map(itemName);

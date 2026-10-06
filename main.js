@@ -154,9 +154,91 @@ const ROMAN_PREFIX = new Set([
 const isCJK = (ch) => !!ch && /[\u2E80-\u2FDF\u3005-\u3007\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/.test(ch);
 // 紧跟在连续「数字字」之后时能坐实「这是年份/编号」的时间/序列单位
 const TIME_UNIT = /^[年月日号期版季周天时分秒旬世载卷章回节篇册集页部届遍]$/;
-// 「数字字 + 这些单位」= 日期或时长，此时数字一定是真的数字，必须拆。
-// 只取最无歧义的几个；分 / 时 / 秒 / 世 / 载 会撞上「十分」「一时」「一世」这类常用说法，不放行。
-const DATE_UNIT = /^[年月日号季周天]$/;
+// ---- L1/L2 证据模型 ----
+// 序数引导词：紧跟其后的数字一定是序号
+const ORDINAL_LEAD = new Set(['第']);
+// 「数字 + 量词 / 时间单位」里的单位字。表里的词一视同仁 —— 不靠「哪个单位可信」来判定，
+// 而是交给整批一致性裁决（见 adjudicate）。分 / 时 / 项 这些会撞上「十分满意」，
+// 由同组的重复值把它们降级，所以不必维护「可信单位白名单」。
+const UNIT_WORDS = new Set('年月日時分秒周天刻季度章节回卷册页部件篇遍届项种类个只本份台张块条座间幅帧码段级期版集场折曲首课讲组批轮幕'.split(''));
+// 热路径上的正则一律预编译：这些判定每个 run 都要跑一遍
+const OPEN_BEFORE = /^[([\u3010\uFF08]$/;
+const CLOSE_AFTER = /^[)\]\u3011\uFF09]$/;
+const UNIT_TAIL = /^[A-Za-z]+$/;
+const ROMAN_ONLY = /^[IVXLCDM]+$/;
+const SPACES = /^[A-Za-z]/;
+
+// 弱证据段前面的汉字标签（罗马数字「同前缀二选一」用）
+const CJK_LABEL = /^[\u2E80-\u9FFF]+$/;
+
+// 拉丁词的序号语境：行首+收尾 / 括号内 / 「序数前缀词 + 空格」后。
+// 汉字后紧接的一律不算 —— 附录C、方案D 里的字母是 A/B/C 式序号而非 100/500，
+// 交给同前缀整批裁决。
+function romanOrdinalAt(name, i, j) {
+  const prev = i > 0 ? name[i - 1] : '';
+  const next = j < name.length ? name[j] : '';
+  const atStart = i === 0;
+  const afterOpener = OPEN_BEFORE.test(prev);
+  const nextEnd = next === '';
+  const nextSep = !!next && ROMAN_AFTER.test(next);
+  const nextSpace = next === ' ';
+  // 「罗马 + 空格 + …」：空格后是中文/分隔符/行尾则多半是序号（II 基础、X - 结语），
+  // 空格后紧跟英文则多半是英文句子（I have a dream），不算。
+  let latinAfterSpace = false;
+  if (nextSpace) {
+    let k = j;
+    while (k < name.length && name[k] === ' ') k++;
+    latinAfterSpace = SPACES.test(name[k]);
+  }
+  if (atStart && (nextEnd || nextSep || (nextSpace && !latinAfterSpace))) return true;
+  if (afterOpener && (nextEnd || nextSep)) return true;
+  if (atStart || afterOpener || isCJK(prev)) return false;
+  // 「序数前缀词 + 空格」：Chapter II / Part III / Lesson IX
+  const before = name.slice(0, i);
+  const mw = /([A-Za-z]+)\s*$/.exec(before);   // 带捕获组，无法预编译
+  if (mw) {
+    const gap = before.slice(mw.index + mw[1].length);
+    if (/^\s*$/.test(gap) && ROMAN_PREFIX.has(mw[1].toLowerCase())) return true;
+  }
+  return false;
+}
+// 整串都是「数字字」才算年份写法（二〇二四=2024），否则 7788 之类会混进来
+function allDigitsOf(run) {
+  for (let i = 0; i < run.length; i++) {
+    if (CN_DIGITS[run[i]] === undefined) return false;
+  }
+  return true;
+}
+
+// 从 to 起向前数「数字串 + 单位字」出现了几轮。链中段（十月六日 的「六日」）靠它拿到 strong，
+// 否则它会掉出链、变成弱证据而随目录内容摇摆。
+function unitChainBefore(name, to) {
+  let k = to, n = 0;
+  while (k > 0 && UNIT_WORDS.has(name[k - 1])) {
+    let m = k - 1;
+    while (m > 0 && CN_RUN_CHARS.has(name[m - 1])) m--;
+    if (m === k - 1) break;   // 单位前面没有数字串 -> 链到此为止
+    n++;
+    k = m;
+  }
+  return n;
+}
+
+// 从 from 起数「单位字 + 数字串」出现了几轮。>=1 说明这是多级链（十月六日 = ?月?日）。
+// 多级链本身就是强信号：单独的「十分」证据不足，「十月六日」却几乎不可能是别的意思。
+function unitChainAfter(name, from) {
+  let k = from, n = 0;
+  while (k < name.length) {
+    if (!UNIT_WORDS.has(name[k])) break;
+    let m = k + 1;
+    while (m < name.length && CN_RUN_CHARS.has(name[m])) m++;
+    if (m === k + 1) break;   // 单位后面没有数字 -> 链到此为止
+    n++;
+    k = m;
+  }
+  return n;
+}
+
 // 罗马数字后的合法收尾：行尾或标点/括号（不含空格，避免误伤 "I have a dream"）
 const ROMAN_AFTER = /^[.,，。．、;；:：!！?？\-–—_/\\|()（）\[\]【\]{}<>《》「」『』"'']$/;
 
@@ -206,34 +288,30 @@ function naturalKey(name) {
       const atStart = i === 0;
       const prevCJK = isCJK(prev), nextCJK = isCJK(next);
 
-      const chars = [...run];
-      const allDigits = chars.every((c) => has(CN_DIGITS, c));
 
-      let treat = false;
-      if (DATE_UNIT.test(next)) {
-        // 日期/时长语境：十月六日、2026年十月六日、三天、一号、七号。
-        // 数字是真数字，即使被「年 / 月 / 日」夹住也必须拆 —— 否则 2026年十月六日 会
-        // 整段退化成文本，排序退化成拼音序（六日 竟排在 四日 之前）。
-        treat = true;
-      } else if (allDigits && chars.length >= 3 && TIME_UNIT.test(next)) {
-        // 年份/编号写法：连续 3 个以上「数字字」且后面紧跟时间单位（二〇二四年、一九九九年第X季度）。
-        // 刻意收得很窄：只看「连续数字」是不够的，会把「七七八八」「三三两两」这类
-        // 全由数字字组成的成语误拆成 7788 / 3322。行尾或分隔符后的数字字串由下面的
-        // 原始规则处理即可（一九九九、 （一九九九） 本就能识别）。
-        treat = true;
-      } else if (prev === '第') {
-        treat = true;                 // 「第X章/节/单元…」：即便被汉字夹住也是序数
-      } else if (atStart && nextCJK) {
-        treat = false;                // 「三体/二手/万一/万有引力」：普通词，不拆数字
-      } else if (!prevCJK || !nextCJK) {
-        treat = true;                 // 「一、」「（一）」「笔记一」「1 前后」「一 基础」等
-      } // 其余：被汉字夹住且不在开头 -> 文本
+      // ---- L2 证据模型：strong / weak / none，取代旧的 if 分支决策树 ----
+      // strong：语法硬证据，数字一定是序号
+      const yearForm = TIME_UNIT.test(next) && run.length >= 3 && allDigitsOf(run);
+      const inBracket = (atStart || OPEN_BEFORE.test(prev))
+        && (next === '' || CLOSE_AFTER.test(next));
+      // 「行首 + 后接汉字」是普通词（三体 / 二手 / 万一），后面所有判定都要给它让路
+      const wordGuard = atStart && nextCJK;
+      // 先 O(1) 挡掉绝大多数情况：next 不是单位字、prev 不是单位字，就不必扫链条
+      const chain = (UNIT_WORDS.has(next) && unitChainAfter(name, j) >= 1)
+        || (i > 0 && UNIT_WORDS.has(name[i - 1]) && unitChainBefore(name, i) >= 1);
+      const strong = chain
+        || yearForm
+        || ORDINAL_LEAD.has(prev)
+        || inBracket
+        || (!wordGuard && (!prevCJK || !nextCJK));
+      // weak：只是「数字 + 量词 / 时间单位」，证据不足，交给整批裁决
+      const weak = !strong && nextCJK && UNIT_WORDS.has(next);
 
-      if (treat) {
+      if (strong || weak) {
         const v = cnToInt(run);
         if (v != null) {
           flush();
-          key.push({ n: 1, v, s: run });
+          key.push({ n: 1, v, s: run, w: weak ? 1 : 0, f: 'c', g: key.length });
           i = j;
           continue;
         }
@@ -243,7 +321,8 @@ function naturalKey(name) {
       continue;
     }
 
-    // 3) 拉丁词（大写纯罗马候选，受语境约束）
+
+    // 3) 拉丁词（大写纯罗马候选）
     if ((code >= 0x41 && code <= 0x5A) || (code >= 0x61 && code <= 0x7A)) {
       let j = i;
       while (j < len) {
@@ -251,55 +330,21 @@ function naturalKey(name) {
         if ((c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A)) j++; else break;
       }
       const w = name.slice(i, j);
-      if (/^[IVXLCDM]+$/.test(w) && !ROMAN_STOP.has(w)) {
-        const v = romanToInt(w);
-        if (v != null) {
-          const prev = i > 0 ? name[i - 1] : '';
-          const next = j < len ? name[j] : '';
-          const atStart = i === 0;
-          const afterOpener = /^[([（【]$/.test(prev);
-          const nextEnd = next === '';
-          const nextSep = !!next && ROMAN_AFTER.test(next);
-          const nextSpace = next === ' ';
-          // 「罗马 + 空格 + …」：空格后是中文/分隔符/行尾则多半是序号（II 基础、X - 结语），
-          // 空格后紧跟英文则多半是英文句子（I have a dream），不算。
-          let latinAfterSpace = false;
-          if (nextSpace) {
-            let k = j;
-            while (k < len && name[k] === ' ') k++;
-            latinAfterSpace = /[A-Za-z]/.test(name[k]);
-          }
-          const prevCJK = isCJK(prev);
-
-          let prefix = false;
-          if (!atStart && !afterOpener && !prevCJK) {
-            const before = name.slice(0, i);
-            const mw = /([A-Za-z]+)\s*$/.exec(before);
-            if (mw) {
-              const gap = before.slice(mw.index + mw[1].length);
-              if (/^\s*$/.test(gap) && ROMAN_PREFIX.has(mw[1].toLowerCase())) prefix = true;
-            }
-          }
-
-          // 序号语境：行首+收尾 / 括号内 / 「前缀词 + 空格」后。
-          // 汉字后紧接的一律不算：「附录C」「方案D」「表L」里的字母是 A/B/C 式序号，
-          // 不是罗马数字 100/500/50——误判会让 附录C 跳到 附录A 前面。
-          // 代价：卷IX、第XL章 这类减法位会按字面排（见 README 已知边界）。
-          const romanOK = (atStart && (nextEnd || nextSep || (nextSpace && !latinAfterSpace)))
-            || (afterOpener && (nextEnd || nextSep))
-            || (prefix && (nextEnd || nextSep || nextSpace));
-          if (romanOK) {
-            flush();
-            key.push({ n: 1, v, s: w });
-            i = j;
-            continue;
-          }
-        }
+      let v = null;
+      if (ROMAN_ONLY.test(w) && !ROMAN_STOP.has(w)) v = romanToInt(w);
+      if (v != null) {
+        // 序号语境：行首+收尾 / 括号内 / 「前缀词 + 空格」后。汉字后紧接的一律不算 ——
+        // 附录C、方案D 里的字母是 A/B/C 式序号而非 100/500，交由同前缀整批裁决。
+        flush();
+        key.push({ n: 1, v, s: w, w: romanOrdinalAt(name, i, j) ? 0 : 1, f: 'r', g: key.length });
+        i = j;
+        continue;
       }
       lit += w;
       i = j;
       continue;
     }
+
 
     lit += ch;
     i++;
@@ -313,32 +358,75 @@ function naturalKey(name) {
 // ---------------------------------------------------------------------------
 // 与 Obsidian 一致的兜底比较器（拼音、忽略大小写、数字感知）
 const collator = new Intl.Collator(undefined, { usage: 'sort', sensitivity: 'base', numeric: true });
-const keyCache = new Map();
+// ---------------------------------------------------------------------------
+// L1 切段缓存 + L3 整批裁决
+// ---------------------------------------------------------------------------
+// 性能关键：切段（naturalKey）只依赖文件名，结果永久缓存、永不失效。
+// L3 的裁决只决定「某个待定段升不升级为数值段」，由 renderKey 廉价重拼，
+// 不会重新扫描字符串 —— 整批裁决因此不会让缓存失效（上一版每次换上下文就 clear）。
+const segCache = new Map();
+function segmentsOf(name) {
+  let s = segCache.get(name);
+  if (s === undefined) { s = naturalKey(name); segCache.set(name, s); }
+  return s;
+}
 
-// ---------------------------------------------------------------------------
-// 罗马序列的上下文判定
-// ---------------------------------------------------------------------------
-// 同一批名字里，同一个汉字前缀只允许一套逻辑：要么按罗马数值（卷I/II/.../IX），
-// 要么按字母序（附录A/B/C）。两套逻辑绝不混用 —— 混用会让同一对名字在不同上下文中
-// 得出相反结果，破坏严格弱序（附录V / 附录L / 附录N 同在时会成环）。
+// 渲染结果按「裁决签名」分桶缓存：同一目录反复排序签名不变 -> 全部命中；换目录换签名
+// -> 换桶，不会把上一批的裁决套到这一批。桶上限 4 个，超出丢弃最旧的。
+const keyBuckets = new Map();
+let adoptSet = null;   // 当前整批被采纳的弱证据段（null = 一个都不采纳）
+let curBucket = new Map();
+keyBuckets.set('', curBucket);
+
+function bucketFor(sig) {
+  let m = keyBuckets.get(sig);
+  if (m) { keyBuckets.delete(sig); keyBuckets.set(sig, m); return m; }   // LRU 触碰
+  m = new Map();
+  keyBuckets.set(sig, m);
+  while (keyBuckets.size > 4) keyBuckets.delete(keyBuckets.keys().next().value);
+  return m;
+}
+
+function renderKey(segments, adopted) {
+  const key = [];
+  let lit = '';
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg.n === 1) {
+      // 精确到「段」而不是全局开关：卷 的罗马段被采纳，不该连带把 附录C 也升级
+      if (seg.w && !(adopted && adopted.has(seg))) { lit += seg.s; continue; }
+      if (lit) { key.push({ n: 0, s: lit }); lit = ''; }
+      key.push({ n: 1, v: seg.v, s: seg.s });
+    } else {
+      lit += seg.s;
+    }
+  }
+  if (lit) key.push({ n: 0, s: lit });
+  return key;
+}
+
+function cachedKey(name) {
+  let k = curBucket.get(name);
+  if (k === undefined) { k = renderKey(segmentsOf(name), adoptSet); curBucket.set(name, k); }
+  return k;
+}
+
+// 同一前缀的罗马候选：全是罗马字母、且至少有一个多字符（卷II / 卷IX）-> 按罗马数值；
+// 出现任一非罗马字母（附录A 的 A）-> 按字母序。两套逻辑绝不混用：混用会让同一对名字
+// 在不同上下文得出相反结果，破坏排序自洽（附录V / 附录L / 附录N 同在时会成环）。
 // 汉字前缀 + 紧接的拉丁字母，后面必须是结尾或非字母（.md / 空格 / 标点）
 const CJK_LATIN = /^([\u2E80-\u9FFF]+)([A-Za-z]+)(?![A-Za-z])/;
 
-// 扫一批名字，挑出「应按罗马数值排」的汉字前缀：
-//   - 出现任一个非罗马字母（附录A 的 A） -> 该前缀按字母序
-//   - 全是罗马字母、且至少有一个多字符（II / IX） -> 该前缀按罗马数值
-//   - 全是罗马字母但都是单字符（只有 I / V / X） -> 按字母序（单字母时两种解释顺序一致）
 function detectRomanPrefixes(names) {
   const seen = new Map();
   for (const name of names) {
     if (!name) continue;
     const m = CJK_LATIN.exec(name);
     if (!m) continue;
-    const prefix = m[1];
     const tail = m[2];
-    let g = seen.get(prefix);
-    if (!g) { g = { blocked: false, multi: false }; seen.set(prefix, g); }
-    if (!/^[IVXLCDM]+$/.test(tail) || romanToInt(tail) == null) g.blocked = true;
+    let g = seen.get(m[1]);
+    if (!g) { g = { blocked: false, multi: false }; seen.set(m[1], g); }
+    if (!ROMAN_ONLY.test(tail) || romanToInt(tail) == null) g.blocked = true;
     else if (tail.length > 1) g.multi = true;
   }
   const out = new Set();
@@ -346,61 +434,79 @@ function detectRomanPrefixes(names) {
   return out;
 }
 
-// 命中罗马模式时，把「前缀 + 罗马串」拆成 文本段 + 数值段（尾部剩余继续 token 化）
-function keyWithRoman(name, prefixes) {
-  if (!prefixes || !prefixes.size) return null;
-  for (const p of prefixes) {
-    if (name.length <= p.length || name.slice(0, p.length) !== p) continue;
-    const rest = name.slice(p.length);
-    const m = /^([IVXLCDM]+)(?![A-Za-z])/.exec(rest);
-    if (!m) continue;
-    const v = romanToInt(m[1]);
-    if (v == null) continue;
-    const key = [{ n: 0, s: p }, { n: 1, v, s: m[1] }];
-    const tail = rest.slice(m[1].length);
-    if (tail) {
-      const t = naturalKey(tail);
-      for (let i = 0; i < t.length; i++) key.push(t[i]);
+// 弱证据段的链模式：?分 / ?项 / ?月?日 —— 只有同模式的一组才互相裁决
+function weakPattern(segments, i) {
+  const parts = ['?'];
+  let k = i;
+  while (k + 2 < segments.length
+    && segments[k + 1].n === 0 && segments[k + 1].s.length === 1
+    && segments[k + 2].n === 1 && segments[k + 2].w) {
+    parts.push(segments[k + 1].s, '?');
+    k += 2;
+  }
+  if (parts.length === 1 && k + 1 < segments.length
+    && segments[k + 1].n === 0 && segments[k + 1].s.length === 1) {
+    parts.push(segments[k + 1].s);
+  }
+  return parts.join('');
+}
+
+// L3 整批裁决：
+//   罗马段   -> 其汉字前缀是否已被判定为罗马序列（detectRomanPrefixes）
+//   中文弱段 -> 同模式组 >= 2 个成员，且值不全相同（十分满意 三次都是 10 -> 降级）
+function adjudicate(segLists, romanSet, names) {
+  const adopted = new Set();
+  const parts = [];
+  const groups = new Map();
+  for (let li = 0; li < segLists.length; li++) {
+    const segs = segLists[li];
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      if (s.n !== 1 || !s.w) continue;
+      if (s.f === 'r') {
+        if (!romanSet.size || i !== 1) continue;
+        const p = segs[0];
+        if (p.n === 0 && CJK_LABEL.test(p.s) && romanSet.has(p.s)) {
+          adopted.add(s);
+          parts.push(names[li] + '#' + s.g);
+        }
+        continue;
+      }
+      const pat = weakPattern(segs, i);
+      let g = groups.get(pat);
+      if (!g) { g = { items: [], nameIndex: li }; groups.set(pat, g); }
+      g.items.push(s);
     }
-    return key;
   }
-  return null;
+  groups.forEach((g) => {
+    if (g.items.length < 2) return;                        // 孤证不足，保守降级
+    const v0 = g.items[0].v;
+    if (g.items.every((x) => x.v === v0)) return;         // 值全同 = 不是编号序列（十分满意）
+    for (const x of g.items) { adopted.add(x); parts.push(names[g.nameIndex] + '#' + x.g); }
+  });
+  parts.sort();
+  return { set: adopted, sig: parts.join('\u0001') };
 }
 
-// 上下文只在一次整批排序期间有效，排完立刻还原（不长期持有、不泄漏到别处）
-let romanSet = null;
-let romanSig = '';
-const romanSignature = (set) => (set && set.size ? Array.from(set).sort().join('\u0001') : '');
-function applyRoman(set, sig) {
-  if (sig === romanSig) return;
-  romanSig = sig;
-  romanSet = set && set.size ? set : null;
-  keyCache.clear();
-}
-
-function cachedKey(name) {
-  let k = keyCache.get(name);
-  if (k === undefined) {
-    k = keyWithRoman(name, romanSet) || naturalKey(name);
-    keyCache.set(name, k);
-  }
-  return k;
-}
-
-// 整批排序入口：先按这批名字定上下文，再排（唯一会让上下文生效的地方）
+// 整批排序入口：先按这批名字做 L3 裁决，再排（唯一会让上下文生效的地方）
 function sortItems(items, reverse) {
   if (!Array.isArray(items)) return items;
-  const set = detectRomanPrefixes(items.map(itemName));
-  const prevSet = romanSet;
-  const prevSig = romanSig;
-  applyRoman(set, romanSignature(set));
+  const names = items.map(itemName);
+  const segLists = names.map(segmentsOf);
+  const verdict = adjudicate(segLists, detectRomanPrefixes(names), names);
+  const prevSet = adoptSet;
+  const prevBucket = curBucket;
+  adoptSet = verdict.set.size ? verdict.set : null;
+  curBucket = bucketFor(verdict.sig);
   try {
     items.sort(reverse ? (a, b) => compareItems(b, a) : compareItems);
   } finally {
-    applyRoman(prevSet, prevSig);
+    adoptSet = prevSet;
+    curBucket = prevBucket;
   }
   return items;
 }
+
 
 const codePointCmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -619,6 +725,7 @@ module.exports.default = CNNaturalSort;
 module.exports.cnToInt = cnToInt;
 module.exports.romanToInt = romanToInt;
 module.exports.naturalKey = naturalKey;
+module.exports.keyOf = (name) => renderKey(segmentsOf(name), adoptSet);
 module.exports.compareKeys = compareKeys;
 module.exports.compareNames = compareNames;
 module.exports.hasNumeral = hasNumeral;
