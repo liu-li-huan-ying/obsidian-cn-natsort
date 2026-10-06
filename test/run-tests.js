@@ -181,6 +181,14 @@ it('中文日期：年 / 月 / 日 逐级拆成数值', () => {
   assert.deepStrictEqual(numsOf('2026年十月六日.md'), [2026, 10, 6]);
   assert.deepStrictEqual(numsOf('2026年三月一日'), [2026, 3, 1]);
 });
+it('分数不算序号：三分之一 / 百分之三十 / 三分之一之二', () => {
+  assert.strictEqual(hasNum('三分之一'), false);
+  assert.strictEqual(hasNum('百分之三十'), false);
+  assert.strictEqual(hasNum('三分之一之二'), false);
+  assert.strictEqual(hasNum('二分之二'), false);
+  // 但「十分满意 / 十分钟」不能被牵连 —— 分之 是分数独有的连接词
+  assert.strictEqual(hasNum('十分满意'), false);
+});
 it('日期白名单不误伤：一时 / 一世 / 一旬 仍按文本', () => {
   assert.strictEqual(hasNum('一时半刻'), false);
   assert.strictEqual(hasNum('一世'), false);

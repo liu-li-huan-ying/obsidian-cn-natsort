@@ -296,16 +296,21 @@ function naturalKey(name) {
         && (next === '' || CLOSE_AFTER.test(next));
       // 「行首 + 后接汉字」是普通词（三体 / 二手 / 万一），后面所有判定都要给它让路
       const wordGuard = atStart && nextCJK;
+      // 「三分之一」「百分之三十」是分数，不是序号。分之 是分数独有的连接词，
+      // 拿它当护栏，��能把分数排除掉，又不会误伤「十分满意 / 十分钟」这类。
+      const fracAfter = name.startsWith('分之', j);
+      const fracBefore = prev === '之';
       // 先 O(1) 挡掉绝大多数情况：next 不是单位字、prev 不是单位字，就不必扫链条
       const chain = (UNIT_WORDS.has(next) && unitChainAfter(name, j) >= 1)
         || (i > 0 && UNIT_WORDS.has(name[i - 1]) && unitChainBefore(name, i) >= 1);
-      const strong = chain
+      const strong = !fracBefore && (
+        chain
         || yearForm
         || ORDINAL_LEAD.has(prev)
         || inBracket
-        || (!wordGuard && (!prevCJK || !nextCJK));
+        || (!wordGuard && (!prevCJK || !nextCJK)));
       // weak：只是「数字 + 量词 / 时间单位」，证据不足，交给整批裁决
-      const weak = !strong && nextCJK && UNIT_WORDS.has(next);
+      const weak = !strong && !fracAfter && !fracBefore && nextCJK && UNIT_WORDS.has(next);
 
       if (strong || weak) {
         const v = cnToInt(run);
